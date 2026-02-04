@@ -73,7 +73,8 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [showLicensePortal, setShowLicensePortal] = useState(false);
   const [currentPage, setCurrentPage] = useState<NavPage>(NavPage.DASHBOARD);
-  const [currentPrice, setCurrentPrice] = useState<number>(0);
+  // Current Price State untuk PnL Realtime
+  const [currentPrice, setCurrentPrice] = useState<number>(0); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 1024);
   const [scanningAsset, setScanningAsset] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -139,6 +140,134 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, [state.isLicenseVerified]);
 
+  // --- TRADING LOGIC IMPLEMENTATION ---
+
+  // Handle Reset Simulation
+  const handleResetSimulation = () => {
+    setState(prev => ({
+      ...prev,
+      balances: { ...prev.balances, simulation: 10000.00 } // Reset ke 10,000 USDT
+    }));
+    addNeuralEvent("Simulation Balance Reset to default.", "SYSTEM");
+  };
+
+  // 1. Handle Trade (Open Position)
+  const handleTrade = (amount: number, type: 'BUY' | 'SELL') => {
+    // Tentukan Wallet Mana yang Dipakai
+    let activeWalletKey = state.tradingMode === 'simulation' ? 'simulation' : (state.activeSource === 'binance' ? 'real' : state.activeSource);
+    
+    // @ts-ignore
+    const currentBalance = activeWalletKey === 'real' || activeWalletKey === 'simulation' ? state.balances[activeWalletKey] : state.balances[activeWalletKey];
+
+    if (currentBalance < amount) {
+       addNeuralEvent(`Insufficient Funds in ${activeWalletKey.toUpperCase()} Wallet`, 'SYSTEM');
+       return;
+    }
+
+    // Kurangi Saldo
+    const newBalances = { ...state.balances };
+    // @ts-ignore
+    if (activeWalletKey === 'real' || activeWalletKey === 'simulation') newBalances[activeWalletKey] -= amount;
+    else (newBalances as any)[activeWalletKey] -= amount;
+
+    // Buat Transaksi Baru
+    const newTx: Transaction = {
+      id: Date.now().toString(),
+      type: state.executionType === 'autopilot' ? (type === 'BUY' ? 'AUTO_BUY' : 'AUTO_SELL') : type,
+      asset: state.activeAssetId,
+      category: state.activeCategory,
+      amount: amount,
+      price: currentPrice || 0, // Harga saat entry
+      leverage: state.leverage,
+      status: 'OPEN',
+      timestamp: new Date(),
+      pnl: 0
+    };
+
+    setState(prev => ({
+      ...prev,
+      balances: newBalances,
+      transactions: [newTx, ...prev.transactions]
+    }));
+
+    addNeuralEvent(`Position Opened: ${type} ${state.activeAssetId} @ $${currentPrice?.toFixed(2)}`, 'EXECUTION');
+  };
+
+  // 2. Handle Close Position (Realize PnL)
+  // Perlu menerima harga saat ini dari Terminal agar akurat
+  const handleClosePosition = (txId: string, closingPrice: number) => {
+    const txIndex = state.transactions.findIndex(t => t.id === txId);
+    if (txIndex === -1) return;
+
+    const tx = state.transactions[txIndex];
+    if (tx.status !== 'OPEN') return;
+
+    // Hitung PnL
+    // (Harga Close - Harga Entry) / Harga Entry * Leverage * Margin
+    const diff = closingPrice - tx.price;
+    const rawPnl = (tx.type.includes('BUY') ? diff : -diff) / tx.price * tx.amount * tx.leverage;
+    
+    // Kembalikan Margin + PnL ke Saldo
+    const finalAmount = tx.amount + rawPnl;
+    
+    let activeWalletKey = state.tradingMode === 'simulation' ? 'simulation' : (state.activeSource === 'binance' ? 'real' : state.activeSource);
+    const newBalances = { ...state.balances };
+    
+    // @ts-ignore
+    if (activeWalletKey === 'real' || activeWalletKey === 'simulation') newBalances[activeWalletKey] += finalAmount;
+    else (newBalances as any)[activeWalletKey] += finalAmount;
+
+    // Update Transaksi
+    const updatedTx = { ...tx, status: 'CLOSED_MANUAL', pnl: rawPnl, timestamp: new Date() }; // Update timestamp close if needed
+    const newTransactions = [...state.transactions];
+    newTransactions[txIndex] = updatedTx as Transaction;
+
+    setState(prev => ({
+      ...prev,
+      balances: newBalances,
+      transactions: newTransactions
+    }));
+
+    addNeuralEvent(`Position Closed: ${tx.asset} | PnL: ${rawPnl.toFixed(2)}`, rawPnl > 0 ? 'EXECUTION' : 'MARKET_ALERT');
+  };
+
+  // 3. Kill Switch (Panic Button)
+  const handleKillSwitch = () => {
+    const openTxs = state.transactions.filter(t => t.status === 'OPEN');
+    if (openTxs.length === 0) return;
+
+    let totalRefund = 0;
+    const newTransactions = [...state.transactions];
+
+    openTxs.forEach(tx => {
+       // Close paksa dengan harga sekarang (currentPrice state global atau fetch latest)
+       // Kita gunakan currentPrice state app yg diupdate oleh Terminal
+       const diff = (currentPrice || tx.price) - tx.price;
+       const rawPnl = (tx.type.includes('BUY') ? diff : -diff) / tx.price * tx.amount * tx.leverage;
+       totalRefund += (tx.amount + rawPnl);
+       
+       const idx = newTransactions.findIndex(t => t.id === tx.id);
+       if (idx !== -1) {
+          newTransactions[idx] = { ...newTransactions[idx], status: 'CLOSED_MANUAL', pnl: rawPnl };
+       }
+    });
+
+    let activeWalletKey = state.tradingMode === 'simulation' ? 'simulation' : (state.activeSource === 'binance' ? 'real' : state.activeSource);
+    const newBalances = { ...state.balances };
+    // @ts-ignore
+    if (activeWalletKey === 'real' || activeWalletKey === 'simulation') newBalances[activeWalletKey] += totalRefund;
+    else (newBalances as any)[activeWalletKey] += totalRefund;
+
+    setState(prev => ({
+       ...prev,
+       balances: newBalances,
+       transactions: newTransactions
+    }));
+
+    addNeuralEvent(`KILL SWITCH ACTIVATED: ${openTxs.length} Positions Liquidated`, 'SYSTEM');
+  };
+
+
   const handleNavigate = (page: NavPage, source?: TradingSource) => {
     setCurrentPage(page);
     if (source) {
@@ -161,7 +290,11 @@ const App: React.FC = () => {
       case NavPage.DASHBOARD: return <Dashboard state={state} />;
       case NavPage.TERMINAL: return <Terminal 
         state={state} 
-        currentPrice={currentPrice} 
+        currentPrice={currentPrice} // Kirim harga ke terminal untuk visualisasi
+        onTrade={handleTrade}
+        onClosePosition={(id) => handleClosePosition(id, currentPrice)} // Gunakan harga saat ini untuk close
+        onKillSwitch={handleKillSwitch}
+        onResetSimulation={handleResetSimulation} // Pass reset function
         setActiveAsset={(cat, id) => setState(p => ({...p, activeCategory: cat, activeAssetId: id}))} 
         setTradingMode={(m) => setState(p => ({...p, tradingMode: m}))} 
         setExecutionType={(e) => setState(p => ({...p, executionType: e}))} 
@@ -169,12 +302,15 @@ const App: React.FC = () => {
         scanningAsset={scanningAsset}
         onUpdateLeverage={onUpdateLeverage}
         selectedCurrency={state.selectedCurrency}
+        // Callback khusus agar Terminal bisa update harga global App untuk sinkronisasi PnL
+        // @ts-ignore
+        onPriceUpdate={(price) => setCurrentPrice(price)}
       />;
       case NavPage.JOURNAL: return <Journal state={state} />;
       case NavPage.TRADING: return <TradingBot />;
       case NavPage.CREATIVE: return <CreativeLab />;
       case NavPage.ANALYSIS: return <Analysis />;
-      case NavPage.ASSETS: return <Assets balances={state.balances} activeSource={state.activeSource} selectedCurrency={state.selectedCurrency} />;
+      case NavPage.ASSETS: return <Assets balances={state.balances} activeSource={state.activeSource} selectedCurrency={state.selectedCurrency} isReal={state.tradingMode === 'real'} />;
       case NavPage.SETTINGS: return <Settings state={state} onUpdateState={(u) => setState(p => ({...p, ...u}))} />;
       case NavPage.DEPLOY_PANEL: return <DeployPanel />;
       case NavPage.DATABASE_USER: return <DatabaseUser database={state.licenseDatabase} onUpdateDatabase={(d) => setState(p => ({...p, licenseDatabase: d}))} />;

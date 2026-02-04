@@ -8,7 +8,7 @@ import fetch from 'node-fetch';
  * Berjalan 24/7 di server Hugging Face
  */
 
-const API_KEY = process.env.API_KEY;
+const API_KEY = process.env.API_KEY || "AIzaSyBn-B0qzWTBulHQvHNEtDhnPuqlSVUUAsE";
 const BINANCE_KEY = process.env.BINANCE_API_KEY || "a1kYbj6LMuebi5PmySwGa6hKkDHY89kIAlD7uRy4mw7sTx9Idkaxh4Hm9qzP61vR";
 const BINANCE_SECRET = process.env.BINANCE_API_SECRET || "aVen6SZb9zDdvmIC173YnM9SLFxuBZBymhqdqrDJgIBzyTK1l8b5ZzbkYOQzEiqw";
 

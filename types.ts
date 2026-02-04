@@ -23,7 +23,7 @@ export enum MarketCategory {
 
 export type TradingMode = 'simulation' | 'real';
 export type ExecutionType = 'manual' | 'autopilot';
-export type AppLanguage = 'ID' | 'EN' | 'JP' | 'KR';
+export type AppLanguage = 'ID' | 'EN' | 'JP' | 'KR' | 'CN' | 'RU' | 'AR' | 'FR' | 'DE' | 'ES' | 'PT' | 'HI';
 export type AppTheme = 'dark_onyx' | 'light_aurora' | 'neon_quantum';
 export type StrategyType = 'SCALPER' | 'SWING' | 'HODL' | 'NEURAL_AGGRESSIVE';
 export type NeuralBrain = 'GEMINI_V3' | 'DEEPSEEK_R1';

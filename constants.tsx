@@ -10,7 +10,7 @@ export const BYBIT_SECRET = "bybit_secret_placeholder_sacred";
 export const TELEGRAM_BOT_TOKEN = "728391:AAH_telegram_node_key";
 export const TELEGRAM_CHAT_ID = "12345678";
 
-export const GROQ_API_KEY = "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";
+export const GROQ_API_KEY = "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";
 
 // Daftar aset untuk Autopilot Scanner
 export const SCAN_SYMBOLS = [
